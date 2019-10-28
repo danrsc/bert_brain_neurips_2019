@@ -1,0 +1,2 @@
+This file can be edited if we want to mark important commits,
+e.g. commits corresponding to the version of the code used in a paper.
