@@ -59,11 +59,6 @@ class KindData:
 class _ResponseKind:
     hp_fmri: str
     hp_meg: str
-    ucl_erp: str
-    ucl_eye: str
-    ucl_self_paced: str
-    ns_reaction_times: str
-    ns_froi: str
     generic: str
 
 

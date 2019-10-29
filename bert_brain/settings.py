@@ -2,10 +2,8 @@ from dataclasses import dataclass, field
 from typing import Sequence, Callable, MutableMapping, Mapping, Optional, Union, Tuple
 
 import numpy as np
-from .data_sets import PreprocessStandardize, PreprocessLog, \
-    PreprocessPCA, PreprocessClip, PreprocessDetrend, HarryPotterMakeLeaveOutFmriRun, PreparedDataView, \
-    ResponseKind, InputFeatures, RawData, natural_stories_make_leave_stories_out, KindData, CorpusKeys, CorpusBase, \
-    UclCorpus
+from .data_sets import PreprocessStandardize, PreprocessDetrend, HarryPotterMakeLeaveOutFmriRun, PreparedDataView, \
+    ResponseKind, InputFeatures, RawData, KindData, CorpusKeys, CorpusBase, HarryPotterCorpus
 from .modeling import CriticKeys, FMRIConvConvWithDilationHead
 
 
@@ -58,42 +56,18 @@ def _default_split_functions():
 
     return {
         CorpusKeys.HarryPotterCorpus: HarryPotterMakeLeaveOutFmriRun(),
-        CorpusKeys.NaturalStoriesCorpus: natural_stories_make_leave_stories_out
     }
 
 
 def _default_preprocessors():
-
-    preprocess_standardize = PreprocessStandardize(stop_mode='content')
-
-    # ResponseKind.colorless defaults to None
-    # ResponseKind.linzen_agree defaults to None
-
-    # alternate hp_meg for soft_label_cross_entropy
-    #     [
-    #         #  preprocess_detrend,
-    #         #  partial(preprocess_standardize, average_axis=None),
-    #         PreprocessDiscretize(bins=np.exp(np.linspace(-0.2, 1., 5))),  # bins=np.arange(6) - 2.5
-    #         PreprocessNanMean())]
 
     return {
         ResponseKind.hp_fmri: [
             PreprocessDetrend(stop_mode=None, metadata_example_group_by='fmri_runs', train_on_all=True),
             PreprocessStandardize(stop_mode=None)],
         ResponseKind.hp_meg: [
-            PreprocessStandardize(average_axis=None, stop_mode='content'),
-            PreprocessPCA(stop_mode='content'),
-            PreprocessStandardize(average_axis=None, stop_mode='content')],
-        # ResponseKind.hp_meg: [
-        #     PreprocessDetrend(stop_mode='content', metadata_example_group_by='fmri_runs', train_on_all=True),
-        #     PreprocessStandardize(stop_mode='content', average_axis=None)],
-
-        ResponseKind.ucl_erp: preprocess_standardize,
-        ResponseKind.ucl_eye: [PreprocessLog(), preprocess_standardize],
-        ResponseKind.ucl_self_paced: [PreprocessLog(), preprocess_standardize],
-        ResponseKind.ns_reaction_times: [
-            PreprocessClip(maximum=3000, value_beyond_max=np.nan), PreprocessLog(), preprocess_standardize],
-        ResponseKind.ns_froi: PreprocessStandardize(stop_mode=None),
+            PreprocessDetrend(stop_mode='content', metadata_example_group_by='fmri_runs', train_on_all=True),
+            PreprocessStandardize(stop_mode='content', average_axis=None)],
     }
 
 
@@ -111,27 +85,14 @@ def _default_prediction_heads():
                 out_kernel_size=5,
                 out_dilation=5,
                 memory_efficient=False)),
-        ResponseKind.ns_froi: PredictionHeadSettings(
-            ResponseKind.ns_froi, FMRIConvConvWithDilationHead, dict(
-                hidden_channels=10,
-                hidden_kernel_size=5,
-                out_kernel_size=5,
-                out_dilation=5,
-                memory_efficient=False))
     }
 
 
 def _default_critics():
 
     return {
-        CorpusKeys.UclCorpus: CriticSettings(critic_type=CriticKeys.mse),
-        ResponseKind.ns_froi: CriticSettings(critic_type=CriticKeys.single_mse),
-        CorpusKeys.NaturalStoriesCorpus: CriticSettings(critic_type=CriticKeys.mse),
         ResponseKind.hp_fmri: CriticSettings(critic_type=CriticKeys.single_mse),
         CorpusKeys.HarryPotterCorpus: CriticSettings(critic_type=CriticKeys.mse),
-        CorpusKeys.ColorlessGreenCorpus: CriticSettings(critic_type=CriticKeys.single_binary_cross_entropy),
-        CorpusKeys.LinzenAgreementCorpus: CriticSettings(critic_type=CriticKeys.single_binary_cross_entropy),
-        CorpusKeys.StanfordSentimentTreebank: CriticSettings(critic_type=CriticKeys.single_binary_cross_entropy)
     }
 
 
@@ -176,7 +137,7 @@ PreprocessorTypeUnion = Union[_PreprocessorTypeUnion, Sequence[_PreprocessorType
 @dataclass
 class Settings:
     # which data to load
-    corpora: Optional[Sequence[CorpusBase]] = (UclCorpus(),)
+    corpora: Optional[Sequence[CorpusBase]] = (HarryPotterCorpus(),)
 
     # maps from a corpus key to a function which takes the index of the current variation and returns another
     # function which will do the splitting. The returned function should take a RawData instance and a RandomState

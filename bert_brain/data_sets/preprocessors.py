@@ -5,7 +5,6 @@ from itertools import chain
 from dataclasses import replace, asdict
 from typing import Optional
 import numpy as np
-from scipy.stats import boxcox
 from scipy.ndimage.filters import gaussian_filter1d
 from scipy.signal import sosfilt
 from sklearn.decomposition import PCA
@@ -13,7 +12,6 @@ from sklearn.decomposition import PCA
 from .input_features import InputFeatures, KindData
 
 __all__ = [
-    'PreprocessBoxcox',
     'PreprocessLog',
     'PreprocessDetrend',
     'PreprocessDiscretize',
@@ -21,7 +19,6 @@ __all__ = [
     'PreprocessFeatureStandardize',
     'PreprocessFeatureNormalize',
     'PreprocessSequenceStandardize',
-    'PreprocessDiff',
     'PreprocessStandardize',
     'PreprocessMakeBinary',
     'PreprocessNanMean',
@@ -30,29 +27,7 @@ __all__ = [
     'PreprocessClip',
     'PreprocessGaussianBlur',
     'PreprocessCompress',
-    'PreprocessSoSFilter',
-    'PreprocessSqueeze',
-    'PreprocessKMeans',
-    'PreprocessMiniBatchKMeans',
-    'PreprocessRandomPair',
-    'preprocess_fork_no_cluster_to_disk']
-
-
-def _fit_boxcox(item):
-    data, indicator_train = item
-    if indicator_train is not None:
-        data = data[indicator_train]
-    data = data[np.logical_not(np.isnan(data))]
-    _, transform_lambda = boxcox(data)
-    return transform_lambda
-
-
-def _apply_boxcox(data, transform_lambdas):
-    data = np.copy(data)
-    for idx, transform_lambda in enumerate(transform_lambdas):
-        indicator_valid = np.logical_not(np.isnan(data[:, idx]))
-        data[indicator_valid, idx] = boxcox(data[indicator_valid, idx], transform_lambda)
-    return data
+    'PreprocessSqueeze']
 
 
 def _indicator_from_examples(data_size, examples, stop_mode=None):
@@ -90,13 +65,6 @@ def _parallel_column_map(fit_fn, apply_fn, data, indicator_fit=None):
     assert(len(fit_result) == data.shape[1])
     data = apply_fn(data, fit_result)
     return np.reshape(data, shape)
-
-
-class PreprocessBoxcox:
-
-    def __call__(self, loaded_data_tuple, metadata, random_state):
-        data = _parallel_column_map(_fit_boxcox, _apply_boxcox, loaded_data_tuple.data)
-        return replace(loaded_data_tuple, data=data)
 
 
 class PreprocessLog:
@@ -181,88 +149,6 @@ class PreprocessDetrend:
             data = PreprocessDetrend._detrend(loaded_data_tuple.data, indicator_train)
 
         return replace(loaded_data_tuple, data=data)
-
-
-class PreprocessKMeans:
-
-    def __init__(self, num_clusters, stop_mode=None, transform_fn=None, n_init=10):
-        self.num_clusters = num_clusters
-        self.n_init = n_init
-        self.stop_mode = stop_mode
-        self.transform_fn = transform_fn
-        self.output_model_path = None
-        self.data_key = None
-
-    def set_model_path(self, output_model_path, data_key):
-        self.output_model_path = output_model_path
-        self.data_key = data_key
-
-    def __call__(self, loaded_data_tuple, metadata, random_state):
-        from sklearn.cluster import KMeans
-        indicator_train = _indicator_from_examples(
-            len(loaded_data_tuple.data), loaded_data_tuple.train, self.stop_mode)
-        valid_train_values = loaded_data_tuple.data[indicator_train]
-        if self.transform_fn is not None:
-            valid_train_values = self.transform_fn(valid_train_values)
-        k_means = KMeans(self.num_clusters, n_init=self.n_init, random_state=random_state)
-        print('clustering...', end='', flush=True)
-        clusters = k_means.fit_predict(
-            np.transpose(np.reshape(valid_train_values, (valid_train_values.shape[0], -1))))
-        cluster_means = np.full((loaded_data_tuple.data.shape[0], self.num_clusters), np.nan)
-        data = np.reshape(loaded_data_tuple.data, (len(loaded_data_tuple.data), -1))
-        for index_cluster, cluster in enumerate(np.unique(clusters)):
-            indicator_cluster = clusters == cluster
-            cluster_means[:, index_cluster] = np.mean(data[:, indicator_cluster], axis=1)
-
-        clusters = np.reshape(clusters, valid_train_values.shape[1:])
-        if not os.path.exists(self.output_model_path):
-            os.makedirs(self.output_model_path)
-        np.save(os.path.join(self.output_model_path, 'kmeans_clusters_{}.npy'.format(self.data_key)), clusters)
-        print('done')
-
-        return replace(loaded_data_tuple, data=cluster_means)
-
-
-class PreprocessMiniBatchKMeans:
-
-    def __init__(self, num_clusters, stop_mode=None, transform_fn=None, n_init=10, batch_size=100):
-        self.num_clusters = num_clusters
-        self.n_init = n_init
-        self.batch_size = batch_size
-        self.stop_mode = stop_mode
-        self.transform_fn = transform_fn
-        self.output_model_path = None
-        self.data_key = None
-
-    def set_model_path(self, output_model_path, data_key):
-        self.output_model_path = output_model_path
-        self.data_key = data_key
-
-    def __call__(self, loaded_data_tuple, metadata, random_state):
-        from sklearn.cluster import MiniBatchKMeans
-        indicator_train = _indicator_from_examples(
-            len(loaded_data_tuple.data), loaded_data_tuple.train, self.stop_mode)
-        valid_train_values = loaded_data_tuple.data[indicator_train]
-        if self.transform_fn is not None:
-            valid_train_values = self.transform_fn(valid_train_values)
-        k_means = MiniBatchKMeans(
-            self.num_clusters, n_init=self.n_init, batch_size=self.batch_size, random_state=random_state)
-        print('clustering...', end='', flush=True)
-        clusters = k_means.fit_predict(
-            np.transpose(np.reshape(valid_train_values, (valid_train_values.shape[0], -1))))
-        cluster_means = np.full((loaded_data_tuple.data.shape[0], self.num_clusters), np.nan)
-        data = np.reshape(loaded_data_tuple.data, (len(loaded_data_tuple.data), -1))
-        for index_cluster, cluster in enumerate(np.unique(clusters)):
-            indicator_cluster = clusters == cluster
-            cluster_means[:, index_cluster] = np.mean(data[:, indicator_cluster], axis=1)
-
-        clusters = np.reshape(clusters, valid_train_values.shape[1:])
-        if not os.path.exists(self.output_model_path):
-            os.makedirs(self.output_model_path)
-        np.save(os.path.join(self.output_model_path, 'kmeans_clusters_{}.npy'.format(self.data_key)), clusters)
-        print('done')
-
-        return replace(loaded_data_tuple, data=cluster_means)
 
 
 class PreprocessDiscretize:
@@ -400,17 +286,6 @@ class PreprocessSequenceStandardize:
             data[data_indices] = (data[data_indices] - mean) / std
 
         return replace(loaded_data_tuple, data=data)
-
-
-class PreprocessDiff:
-
-    def __init__(self, fill_value=0):
-        self.fill_value = fill_value
-
-    def __call__(self, loaded_data_tuple, metadata, random_state):
-        data = loaded_data_tuple.data
-        padding = np.full((1,) + data.shape[1:], self.fill_value, data.dtype)
-        return replace(loaded_data_tuple, data=np.concatenate([padding, np.diff(data, axis=0)]))
 
 
 class PreprocessPCA:
@@ -676,348 +551,3 @@ class PreprocessCompress:
         condition = metadata[self.metadata_condition_name]
         data = np.compress(condition, loaded_data_tuple.data, axis=self.compress_axis)
         return replace(loaded_data_tuple, data=data)
-
-
-class PreprocessSoSFilter:
-
-    def __init__(self, sos, axis=0):
-        """
-        Apply scipy.signal.sosfilt to data
-        Args:
-            sos: iirfilter created with output='sos',
-                e.g.
-                    A high-pass butterworth filter for a sampling rate of 0.5 Hz
-                    and cutoff 0.2 Hz
-                signal.butter(10, 0.2, 'hp', fs=0.5, output='sos')
-            axis: Which axis to apply along
-        """
-        self.sos = sos
-        self.axis = axis
-
-    def __call__(self, loaded_data_tuple, metadata, random_state):
-        return replace(loaded_data_tuple, data=sosfilt(self.sos, loaded_data_tuple.data, axis=self.axis))
-
-
-class PreprocessRandomPair:
-
-    def __init__(
-            self,
-            num_samples_per_group,
-            metadata_example_group_by,
-            data_id_pair_fn_map,
-            combine_fn=None,
-            emit_both=False,
-            stop_mode=None):
-        self.num_samples_per_group = num_samples_per_group
-        self.metadata_example_group_by = metadata_example_group_by
-        self.data_id_pair_fn_per_response_data = data_id_pair_fn_map
-        self.combine_fn = combine_fn
-        self.emit_both = emit_both
-        self.stop_mode = stop_mode
-
-    @staticmethod
-    def pair_from_end(data_ids1, data_ids2, is_stop1, is_stop2, random_state, emit_both, stop_mode):
-        skip = len(data_ids2) - (len(data_ids1) - 1)
-        skip1, skip2 = 0, 0
-        if skip < 0:  # seq 2 is shorter, skip some of seq 1
-            start = len(data_ids1)
-            skip1 = -skip
-        else:
-            start = len(data_ids1) + skip
-            skip2 = skip
-        paired = list()
-        for i in range(len(data_ids1) + len(data_ids2)):
-            i1 = i - start + 1 + skip1
-            i2 = i - start + skip2
-            if i >= start:
-                meets_stop_requirement = True
-                if stop_mode is not None:
-                    if stop_mode == 'content':
-                        if is_stop1[i1] or is_stop2[i2]:
-                            meets_stop_requirement = False
-                    elif stop_mode == 'stop':
-                        if not is_stop1[i1] or not is_stop2[i2]:
-                            meets_stop_requirement = False
-                    elif stop_mode == 'matched':
-                        if is_stop1[i1] != is_stop2[i2]:
-                            meets_stop_requirement = False
-                    else:
-                        raise ValueError('Unknown value for stop_mode: {}'.format(stop_mode))
-                if meets_stop_requirement:
-                    paired.append((data_ids1[i1], data_ids2[i2]))
-                    if emit_both:
-                        paired[i1] = paired[i]
-                else:
-                    paired.append(None)
-            else:
-                paired.append(None)
-        return paired
-
-    @staticmethod
-    def pair_from_start(data_ids1, data_ids2, is_stop1, is_stop2, random_state, emit_both, stop_mode):
-        end = len(data_ids1) + min(len(data_ids1) - 1, len(data_ids2))
-        paired = list()
-        for i in range(len(data_ids1) + len(data_ids2)):
-            i1 = i - len(data_ids1) + 1
-            i2 = i - len(data_ids1)
-            if len(data_ids1) <= i < end:
-                meets_stop_requirement = True
-                if stop_mode is not None:
-                    if stop_mode == 'content':
-                        if is_stop1[i1] or is_stop2[i2]:
-                            meets_stop_requirement = False
-                    elif stop_mode == 'stop':
-                        if not is_stop1[i1] or not is_stop2[i2]:
-                            meets_stop_requirement = False
-                    elif stop_mode == 'matched':
-                        if is_stop1[i1] != is_stop2[i2]:
-                            meets_stop_requirement = False
-                    else:
-                        raise ValueError('Unknown value for stop_mode: {}'.format(stop_mode))
-                if meets_stop_requirement:
-                    paired.append((data_ids1[i1], data_ids2[i2]))
-                    if emit_both:
-                        paired[i1] = paired[i]
-                else:
-                    paired.append(None)
-            else:
-                paired.append(None)
-        return paired
-
-    @staticmethod
-    def pair_random(data_ids1, data_ids2, is_stop1, is_stop2, random_state, emit_both, stop_mode):
-        idx1 = np.arange(len(data_ids1) - 1) + 1  # skip [CLS]
-        idx2 = np.arange(len(data_ids2))
-
-        indicator_valid1 = data_ids1[1:] >= 0
-        indicator_valid2 = data_ids2 >= 0
-        if stop_mode is not None:
-            if stop_mode == 'content':
-                indicator_valid1 = np.logical_and(indicator_valid1, np.logical_not(is_stop1[1:]))
-                indicator_valid2 = np.logical_and(indicator_valid2, np.logical_not(is_stop2))
-            elif stop_mode == 'stop':
-                indicator_valid1 = np.logical_and(indicator_valid1, is_stop1[1:])
-                indicator_valid2 = np.logical_and(indicator_valid2, is_stop2)
-            elif stop_mode == 'matched':
-                pass
-            else:
-                raise ValueError('Unknown value for stop_mode: {}'.format(stop_mode))
-
-        idx1 = random_state.permutation(idx1[indicator_valid1])
-        idx2 = idx2[indicator_valid2]
-
-        if stop_mode == 'matched':
-            indicator_content1 = is_stop1[idx1]
-            indicator_content2 = is_stop2[idx2]
-            idx1_content = idx1[indicator_content1]
-            idx1_stop = idx1[np.logical_not(indicator_content1)]
-            idx2_content = idx2[indicator_content2]
-            idx2_stop = idx2[np.logical_not(indicator_content2)]
-            idx1_content = idx1_content[:min(len(idx1_content), len(idx2_content))]
-            idx2_content = idx2_content[:len(idx1_content)]
-            idx1_stop = idx1_stop[:min(len(idx1_stop), len(idx2_stop))]
-            idx2_stop = idx2_stop[:len(idx1_stop)]
-            idx1 = np.concatenate(idx1_content, idx1_stop)
-            idx2 = np.concatenate(idx2_content, idx2_stop)
-        else:
-            idx1 = idx1[:min(len(idx1), len(idx2))]
-            idx2 = idx2[:len(idx1)]
-
-        idx_i = 0
-        paired = list()
-        for i in range(len(data_ids1) + len(data_ids2)):
-            i2 = i - len(data_ids1)
-            if idx_i < len(idx2) and i2 == idx2[idx_i]:
-                i1 = idx1[idx_i]
-                paired.append((data_ids1[i1], data_ids2[i2]))
-                if emit_both:
-                    paired[i1] = paired[i]
-                idx_i += 1
-            else:
-                paired.append(None)
-        return paired
-
-    def _get_data_id_pair_fn(self, response_key, kind):
-        if callable(self.data_id_pair_fn_per_response_data):
-            return self.data_id_pair_fn_per_response_data
-        if response_key in self.data_id_pair_fn_per_response_data:
-            return self.data_id_pair_fn_per_response_data[response_key]
-        elif kind in self.data_id_pair_fn_per_response_data:
-            return self.data_id_pair_fn_per_response_data[kind]
-        else:
-            raise ValueError('Unspecified data_id_pair_fn')
-
-    def __call__(self, loaded_data_tuple, metadata, random_state):
-        if metadata is None or self.metadata_example_group_by not in metadata:
-            raise ValueError('metadata_example_group_by {} not found in metadata'.format(
-                self.metadata_example_group_by))
-        combined = dict()
-        old_to_new = dict()
-        metadata_indices = list()
-        unique_id = 0
-        for split_name in ['train', 'validation', 'test']:
-            split = getattr(loaded_data_tuple, split_name)
-            grouped_examples = _unsorted_group_by(
-                split, lambda ex: metadata[self.metadata_example_group_by][ex.unique_id])
-            paired = list()
-            len1 = list()
-            for idx_group, (group, group_examples) in enumerate(grouped_examples):
-                picked = set()
-                while len(paired) < self.num_samples_per_group * (idx_group + 1):
-                    while True:
-                        i1 = random_state.choice(len(group_examples))
-                        while True:
-                            i2 = random_state.choice(len(group_examples))
-                            if i2 != i1:
-                                break
-                        if (i1, i2) not in picked:
-                            picked.add((i1, i2))
-                            break
-
-                    ex1 = asdict(group_examples[i1])
-                    ex2 = asdict(group_examples[i2])
-
-                    assert(ex2['tokens'][0] == '[CLS]')  # skip token 0 on ex2
-
-                    pair = dict()
-                    for key in ex1:
-                        if key == 'unique_id':
-                            pair[key] = unique_id
-                            unique_id += 1
-                        elif key == 'data_ids':
-                            pair[key] = type(ex1[key])()
-                            for k in ex1[key]:
-                                assert(isinstance(ex1[key][k], np.ndarray))
-                                pair[key][k] = np.concatenate([ex1[key][k], ex2[key][k][1:]])
-                        elif key == 'index_word_in_example':
-                            pair[key] = np.concatenate([ex1[key], ex2[key][1:] - 1 + ex1[key][-1]])
-                        elif key == 'index_token_in_sentence':
-                            pair[key] = np.concatenate([ex1[key], ex2[key][1:] - 1 + ex1[key][-1]])
-                        elif key == 'multipart_id':
-                            if ex1[key] is None and ex2[key] is None:
-                                pair[key] = None
-                            if ex1[key] != ex2[key]:
-                                raise ValueError('Cannot pair examples with different multipart ids')
-                            pair[key] = ex1[key]
-                        elif ex1[key] is None or ex2[key] is None:
-                            if ex1[key] is not None or ex2[key] is not None:
-                                raise ValueError('Cannot pair examples where one is None '
-                                                 'and the other is not on key: {}'.format(key))
-                            pair[key] = None
-                        elif isinstance(ex1[key], tuple):
-                            pair[key] = ex1[key] + ex2[key][1:]
-                        else:
-                            if not isinstance(ex1[key], np.ndarray):
-                                print(key, type(ex1[key]))
-                            assert(isinstance(ex1[key], np.ndarray))
-                            pair[key] = np.concatenate([ex1[key], ex2[key][1:]])
-
-                    paired.append(InputFeatures(**pair))
-                    len1.append(len(ex1['tokens']))
-                    metadata_indices.append(ex1['unique_id'])
-
-            for response_k in loaded_data_tuple.data:
-                if response_k not in combined:
-                    combined[response_k] = list()
-                    old_to_new[response_k] = dict()
-                data_id_pair_fn = self._get_data_id_pair_fn(response_k, loaded_data_tuple.data[response_k].kind)
-                data = loaded_data_tuple.data[response_k].data
-                for ex1_len, pair in zip(len1, paired):
-                    data_id_pairs = data_id_pair_fn(
-                        pair.data_ids[response_k][:ex1_len],
-                        pair.data_ids[response_k][ex1_len:],
-                        pair.is_stop[:ex1_len],
-                        pair.is_stop[ex1_len:],
-                        random_state,
-                        self.emit_both,
-                        self.stop_mode)
-                    assert(len(data_id_pairs) == len(pair.data_ids[response_k]))
-                    new_data_ids = list()
-                    for data_id_pair in data_id_pairs:
-                        if isinstance(data_id_pair, tuple):
-                            id1, id2 = data_id_pair
-                            if id1 < 0 or id2 < 0:
-                                new_data_ids.append(-1)
-                            else:
-                                if (id1, id2) in old_to_new[response_k]:
-                                    new_data_ids.append(old_to_new[response_k][(id1, id2)])
-                                else:
-                                    old_to_new[response_k][(id1, id2)] = len(combined[response_k])
-                                    new_data_ids.append(len(combined[response_k]))
-                                    if self.combine_fn is None:
-                                        combined[response_k].append(data[id2] - data[id1])
-                                    else:
-                                        combined[response_k].append(self.combine_fn(data[id1], data[id2]))
-                        elif isinstance(data_id_pair, int):
-                            if data_id_pair >= 0:
-                                raise ValueError('Invalid data_id_pair: {}'.format(data_id_pair))
-                            else:
-                                new_data_ids.append(-1)
-                        elif data_id_pair is None:
-                            new_data_ids.append(-1)
-                        else:
-                            raise ValueError('Invalid data_id_pair: {}'.format(data_id_pair))
-                    assert(len(new_data_ids) == len(pair.data_ids[response_k]))
-                    pair.data_ids[response_k] = np.array(new_data_ids)
-            loaded_data_tuple = replace(loaded_data_tuple, **{split_name: paired})
-        loaded_data_tuple = replace(loaded_data_tuple, data=type(loaded_data_tuple.data)(
-            (k, KindData(loaded_data_tuple.data[k].kind, np.array(combined[k]))) for k in loaded_data_tuple.data))
-        metadata = type(metadata)((k, metadata[k][metadata_indices]) for k in metadata)
-        return loaded_data_tuple, metadata
-
-
-class PreprocessToDisk:
-
-    def __init__(self, delete=True):
-        self.output_model_path = None
-        self.data_key = None
-        self.delete = delete
-
-    def set_model_path(self, output_model_path, data_key):
-        self.output_model_path = output_model_path
-        self.data_key = data_key
-
-    def __call__(self, loaded_data_tuple, metadata, random_state):
-        if not os.path.exists(self.output_model_path):
-            os.makedirs(self.output_model_path)
-        print('saving {} to disk...'.format(self.data_key), end='', flush=True)
-        unique_ids = list()
-        lengths = list()
-        data_ids = list()
-        for ex in chain(
-                loaded_data_tuple.train, loaded_data_tuple.validation, loaded_data_tuple.test):
-            unique_ids.append(ex.unique_id)
-            lengths.append(len(ex.data_ids))
-            data_ids.extend(ex.data_ids)
-        np.savez(
-            os.path.join(self.output_model_path, '{}.npz'.format(self.data_key)),
-            unique_ids=np.array(unique_ids),
-            lengths=np.array(lengths),
-            data_ids=np.array(data_ids),
-            data=loaded_data_tuple.data)
-        if self.delete:
-            return replace(loaded_data_tuple, data=None)
-        print('done')
-        return loaded_data_tuple
-
-
-def preprocess_fork_no_cluster_to_disk(name, kind, preprocessor):
-    if preprocessor is None or isinstance(preprocessor, str):
-        return None, None
-    if callable(preprocessor):
-        if isinstance(preprocessor, PreprocessKMeans):
-            return name + '_no_cluster_to_disk', PreprocessToDisk()
-        else:
-            return None, None
-    else:
-        new_preprocess = list()
-        has_kmeans = False
-        for step in preprocessor:
-            if isinstance(step, PreprocessKMeans):
-                has_kmeans = True
-            else:
-                new_preprocess.append(step)
-        if not has_kmeans:
-            return None, None
-        new_preprocess.append(PreprocessToDisk())
-        return name + '_no_cluster_to_disk', new_preprocess
