@@ -849,7 +849,7 @@ def get_field_predictions(
     if not pre_matched:
         training_variation = match_variation(variation_set_name, training_variation)
     output_dir = os.path.join(paths_obj.result_path, variation_set_name, task_hash(training_variation))
-    aggregator = None
+    aggregator = Aggregator()
     run_iterable = (index_run,) if index_run is not None else range(num_runs)
     for index_run in run_iterable:
         validation_npz_path = os.path.join(output_dir, 'run_{}'.format(index_run), 'output_validation.npz')
@@ -857,7 +857,6 @@ def get_field_predictions(
             raise ValueError('Path does not exist: {}'.format(validation_npz_path))
         output_results = read_predictions(validation_npz_path)
         field_results = output_results[field_name]
-        aggregator = Aggregator()
         for result in field_results:
             aggregator.update(result, is_sequence=result.sequence_type != 'single')
 
